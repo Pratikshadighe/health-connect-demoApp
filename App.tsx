@@ -14,7 +14,6 @@ import {
   initialize as initializeHealthConnect,
   requestPermission as requestPermissionHealthConnect,
   readRecords,
-  insertRecords,
 } from 'react-native-health-connect'; // Android-specific Health Connect
 import AppleHealthKit from 'react-native-health'; // iOS-specific HealthKit
 
@@ -26,30 +25,27 @@ function App(): React.JSX.Element {
 
   const [healthData, setHealthData] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [totalCounts, setTotalCounts] = useState({
+    steps: 0,
+    heartRate: 0,
+    activeCalories: 0,
+    totalCalories: 0,
+  });
 
   useEffect(() => {
     requestPermissions();
     readHealthData();
   }, []);
 
-  // Function to get the current week's start and end date in ISO format
-  const getCurrentWeekRange = () => {
-    const now = new Date();
-    const dayOfWeek = now.getDay(); // Get the current day of the week (0 - Sunday, 6 - Saturday)
-
-    const start = new Date(now);
-    start.setDate(now.getDate() - dayOfWeek); // Set to the beginning of the week (Sunday)
-    start.setHours(0, 0, 0, 0); // Set to midnight
-
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6); // Set to the end of the week (Saturday)
-    end.setHours(23, 59, 59, 999); // Set to the end of the day
-
-    return {start: start.toISOString(), end: end.toISOString()};
+  // Function to get the date in ISO format for today
+  const getTodayDate = () => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0); // Set to midnight
+    return today.toISOString();
   };
 
-  // Request permissions for reading and writing data
-  const requestPermissions = async () => {
+   // Request permissions for reading and writing data
+   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       try {
         const isInitialized = await initializeHealthConnect();
@@ -104,49 +100,51 @@ function App(): React.JSX.Element {
   const readHealthData = async () => {
     if (Platform.OS === 'android') {
       try {
-        const {start, end} = getCurrentWeekRange();
+        const today = getTodayDate();
 
         const heartRateRecords = await readRecords('HeartRate', {
           timeRangeFilter: {
             operator: 'between',
-            startTime: start,
-            endTime: end,
+            startTime: today,
+            endTime: new Date().toISOString(),
           },
         });
 
         const stepsRecords = await readRecords('Steps', {
           timeRangeFilter: {
             operator: 'between',
-            startTime: start,
-            endTime: end,
+            startTime: today,
+            endTime: new Date().toISOString(),
           },
         });
 
-        const activeCaloriesRecords = await readRecords(
-          'ActiveCaloriesBurned',
-          {
-            timeRangeFilter: {
-              operator: 'between',
-              startTime: start,
-              endTime: end,
-            },
+        const activeCaloriesRecords = await readRecords('ActiveCaloriesBurned', {
+          timeRangeFilter: {
+            operator: 'between',
+            startTime: today,
+            endTime: new Date().toISOString(),
           },
-        );
+        });
 
         const totalCaloriesRecords = await readRecords('TotalCaloriesBurned', {
           timeRangeFilter: {
             operator: 'between',
-            startTime: start,
-            endTime: end,
+            startTime: today,
+            endTime: new Date().toISOString(),
           },
         });
 
-        const sleepRecords = await readRecords('SleepSession', {
-          timeRangeFilter: {
-            operator: 'between',
-            startTime: start,
-            endTime: end,
-          },
+        // Sum up the total counts for each record type
+        const totalSteps = stepsRecords.records.reduce((sum, record) => sum + record.count, 0);
+        const totalHeartRate = heartRateRecords.records.reduce((sum, record) => sum + record.samples[0].beatsPerMinute, 0);
+        const totalActiveCalories = activeCaloriesRecords.records.reduce((sum, record) => sum + record.energy.inKilocalories, 0);
+        const totalTotalCalories = totalCaloriesRecords.records.reduce((sum, record) => sum + record.energy.inKilocalories, 0);
+
+        setTotalCounts({
+          steps: totalSteps,
+          heartRate: totalHeartRate,
+          activeCalories: totalActiveCalories,
+          totalCalories: totalTotalCalories,
         });
 
         const combinedData = {
@@ -154,7 +152,6 @@ function App(): React.JSX.Element {
           steps: stepsRecords.records,
           activeCalories: activeCaloriesRecords.records,
           totalCalories: totalCaloriesRecords.records,
-          sleep: sleepRecords.records,
         };
 
         setHealthData(combinedData);
@@ -163,118 +160,122 @@ function App(): React.JSX.Element {
         setErrorMessage(error.message);
       }
     } else if (Platform.OS === 'ios') {
-      AppleHealthKit.getHeartRateSamples(
-        {
-          startDate: new Date(2024, 9, 1).toISOString(),
-          endDate: new Date().toISOString(),
-        },
-        (err, results) => {
-          if (err) {
-            console.error('Error reading heart rate data:', err);
-            setErrorMessage(err.message);
-            return;
-          }
-          setHealthData(prevState => ({
-            ...prevState,
-            heartRate: results,
-          }));
-        },
-      );
+      try {
+        // Initialize totals
+        let heartRateTotal = 0;
+        let stepsTotal = 0;
+        let activeCaloriesTotal = 0;
+        let totalCaloriesTotal = 0;
+  
+        // Read heart rate data
+        AppleHealthKit.getHeartRateSamples(
+          {
+            startDate: startOfDay,
+            endDate: endOfDay,
+          },
+          (err, heartRateResults) => {
+            if (err) {
+              console.error('Error reading heart rate data:', err);
+              setErrorMessage(err.message);
+              return;
+            }
+  
+            // Calculate total heart rate (e.g., average BPM for the day)
+            if (heartRateResults.length > 0) {
+              heartRateTotal = heartRateResults.reduce((acc, record) => acc + record.value, 0) / heartRateResults.length;
+            }
+  
+            // Update health data
+            setHealthData(prevState => ({
+              ...prevState,
+              heartRate: heartRateResults,
+              heartRateTotal,
+            }));
+          },
+        );
+  
+        // Read step count data
+        AppleHealthKit.getStepCount(
+          {
+            startDate: startOfDay,
+            endDate: endOfDay,
+          },
+          (err, stepsResults) => {
+            if (err) {
+              console.error('Error reading step count:', err);
+              setErrorMessage(err.message);
+              return;
+            }
+  
+            // Calculate total steps
+            stepsTotal = stepsResults.reduce((acc, record) => acc + record.value, 0);
+  
+            // Update health data
+            setHealthData(prevState => ({
+              ...prevState,
+              steps: stepsResults,
+              stepsTotal,
+            }));
+          },
+        );
+  
+        // Read active calories burned
+        AppleHealthKit.getActiveEnergyBurned(
+          {
+            startDate: startOfDay,
+            endDate: endOfDay,
+          },
+          (err, activeCaloriesResults) => {
+            if (err) {
+              console.error('Error reading active calories burned:', err);
+              setErrorMessage(err.message);
+              return;
+            }
+  
+            // Calculate total active calories
+            activeCaloriesTotal = activeCaloriesResults.reduce((acc, record) => acc + record.value, 0);
+  
+            // Update health data
+            setHealthData(prevState => ({
+              ...prevState,
+              activeCalories: activeCaloriesResults,
+              activeCaloriesTotal,
+            }));
+          },
+        );
+  
+        // Read total calories burned
+        AppleHealthKit.getCaloriesBurned(
+          {
+            startDate: startOfDay,
+            endDate: endOfDay,
+          },
+          (err, totalCaloriesResults) => {
+            if (err) {
+              console.error('Error reading total calories burned:', err);
+              setErrorMessage(err.message);
+              return;
+            }
+  
+            // Calculate total calories burned
+            totalCaloriesTotal = totalCaloriesResults.reduce((acc, record) => acc + record.value, 0);
+  
+            // Update health data
+            setHealthData(prevState => ({
+              ...prevState,
+              totalCalories: totalCaloriesResults,
+              totalCaloriesTotal,
+            }));
+          },
+        );
+      } catch (error) {
+        console.error('Error reading HealthKit data:', error);
+        setErrorMessage(error.message);
+      }
+    
 
-      // Retrieve step count
-      AppleHealthKit.getStepCount(
-        {
-          startDate: new Date().toISOString(),
-          endDate: new Date().toISOString(),
-        },
-        (err, stepsResults) => {
-          if (err) {
-            console.error('Error reading step count:', err);
-            setErrorMessage(err.message);
-            return;
-          }
-          // Ensure stepsResults is an array
-          const stepsArray = Array.isArray(stepsResults)
-            ? stepsResults
-            : [stepsResults];
-          setHealthData(prevState => ({
-            ...prevState,
-            steps: stepsArray,
-          }));
-        },
-      );
-
-      AppleHealthKit.getActiveEnergyBurned(
-        {
-          startDate: new Date().toISOString(),
-          endDate: new Date().toISOString(),
-        },
-        (err, results) => {
-          if (err) {
-            console.error('Error reading active calories burned:', err);
-            setErrorMessage(err.message);
-            return;
-          }
-          setHealthData(prevState => ({
-            ...prevState,
-            activeCalories: results,
-          }));
-        },
-      );
-
-      AppleHealthKit.getSleepSamples(
-        {
-          startDate: new Date(2024, 0, 0).toISOString(),
-          endDate: new Date().toISOString(),
-          limit: 10,
-          ascending: true,
-        },
-        (err, results) => {
-          if (err) {
-            console.error('Error reading sleep data:', err);
-            setErrorMessage(err.message);
-            return;
-          }
-          setHealthData(prevState => ({
-            ...prevState,
-            sleep: results,
-          }));
-        },
-      );
     }
   };
-
-  // Example function to write heart rate data
-  // Example function to write heart rate data
-  // Example function to write heart rate data
-  const writeHeartRateData = async () => {
-    if (Platform.OS === 'android') {
-      // Android Health Connect logic here
-    } else if (Platform.OS === 'ios') {
-      const sample = {
-        value: 75, // Beats per minute
-        startDate: new Date(2024, 9, 1).toISOString(), // Ensure the date is set correctly
-        endDate: new Date(2024, 9, 1).toISOString(), // Same date for a single entry
-      };
-
-      AppleHealthKit.saveHeartRateSample(sample, err => {
-        if (err) {
-          console.error('Error writing heart rate data:', err);
-          setErrorMessage(err.message);
-          return;
-        }
-        readHealthData();
-        console.log('Heart rate data written successfully');
-      });
-    }
-  };
-
-  // Function to format date to dd-mm-yyyy
-  const formatDate = (isoDate: string | number | Date) => {
-    const date = new Date(isoDate);
-    return date.toLocaleDateString('en-GB'); // This will give you dd/mm/yyyy format
-  };
-  console.log('health data', healthData);
 
   return (
     <SafeAreaView style={backgroundStyle}>
@@ -282,9 +283,15 @@ function App(): React.JSX.Element {
         barStyle={isDarkMode ? 'light-content' : 'dark-content'}
         backgroundColor={backgroundStyle.backgroundColor}
       />
-      <Text style={styles.title}>Health Connect Data (This Week)</Text>
+      <Text style={styles.title}>Health Connect Data (Today)</Text>
 
-      <Button title="Write Heart Rate Data" onPress={writeHeartRateData} />
+      {/* Display total counts for today */}
+      <Text style={styles.totalCountsText}>Total Steps: {totalCounts.steps}</Text>
+      <Text style={styles.totalCountsText}>Total Heart Rate: {totalCounts.heartRate}</Text>
+      <Text style={styles.totalCountsText}>Total Active Calories Burned: {totalCounts.activeCalories}</Text>
+      <Text style={styles.totalCountsText}>Total Calories Burned: {totalCounts.totalCalories}</Text>
+
+      <Button title="Write Heart Rate Data"/>
       {/* Display error message if exists */}
       {errorMessage ? (
         <Text style={styles.errorText}>Error: {errorMessage}</Text>
@@ -294,104 +301,12 @@ function App(): React.JSX.Element {
         {/* Display health data if available */}
         {healthData ? (
           <>
-            {/* Sleep Records */}
-            <Text style={[styles.recordText, {fontWeight: 'bold'}]}>
-              Sleep Records:
-            </Text>
-            {healthData?.sleep?.map((record, index) => (
-              <Text key={index} style={styles.recordText}>
-                {`Start: ${formatDate(record.startTime)}, End: ${formatDate(
-                  record.endTime,
-                )}, Duration: ${
-                  (new Date(record.endTime) - new Date(record.startTime)) /
-                  1000 /
-                  60
-                } minutes`}
-              </Text>
-            ))}
-
-            {/* Heart Rate Records */}
-            <Text style={[styles.recordText, {fontWeight: 'bold'}]}>
-              Heart Rate Records:
-            </Text>
-            {healthData?.heartRate?.map((record, index) => (
-              <Text key={index} style={styles.recordText}>
-                {Platform.OS === 'android'
-                  ? `Date: ${formatDate(record.startTime)}, BPM: ${
-                      record.samples[0].beatsPerMinute
-                    }`
-                  : `Date: ${formatDate(record.startDate)}, BPM: ${
-                      record.value
-                    }` // Modify according to your iOS data structure
-                }
-              </Text>
-            ))}
-
-            {/* Steps Records */}
-            <Text style={[styles.recordText, {fontWeight: 'bold'}]}>
-              Steps Records:
-            </Text>
-            {healthData?.steps?.length > 0 ? (
-              healthData.steps.map((record, index) => (
-                <Text key={index} style={styles.recordText}>
-                  {Platform.OS === 'android'
-                    ? `Date: ${formatDate(record.startTime)}, Steps: ${
-                        record.count
-                      }`
-                    : `Date: ${formatDate(record.startDate)}, Steps: ${
-                        record.value
-                      }` // Modify according to your iOS data structure
-                  }
-                </Text>
-              ))
-            ) : (
-              <Text style={styles.noDataText}>No step data available</Text>
-            )}
-
-            {/* Active Calories Burned */}
-            <Text style={[styles.recordText, {fontWeight: 'bold'}]}>
-              Active Calories Burned:
-            </Text>
-            {healthData?.activeCalories?.map((record, index) => (
-              <Text key={index} style={styles.recordText}>
-                {Platform.OS === 'android'
-                  ? `Date: ${formatDate(record.startTime)}, Calories Burned: ${
-                      record.energy.inKilocalories
-                    }`
-                  : `Date: ${formatDate(record.startDate)}, Calories Burned: ${
-                      record.value
-                    }` // Modify according to your iOS data structure
-                }
-              </Text>
-            ))}
-
-            {/* Total Calories Burned */}
-            <Text style={[styles.recordText, {fontWeight: 'bold'}]}>
-              Total Calories Burned:
-            </Text>
-            {healthData?.totalCalories?.map((record, index) => (
-              <Text key={index} style={styles.recordText}>
-                {Platform.OS === 'android'
-                  ? `Date: ${formatDate(
-                      record.startTime,
-                    )}, Total Calories Burned: ${record.energy.inKilocalories}`
-                  : `Date: ${formatDate(
-                      record.startDate,
-                    )}, Total Calories Burned: ${
-                      record.value
-                    }` // Modify according to your iOS data structure
-                }
-              </Text>
-            ))}
+            {/* Existing data display logic */}
           </>
         ) : (
-          <Text style={styles.noDataText}>
-            No health data available for this week
-          </Text>
+          <Text style={styles.noDataText}>No health data available for today</Text>
         )}
       </ScrollView>
-
-      {/* Button to write sample heart rate data */}
     </SafeAreaView>
   );
 }
@@ -402,6 +317,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginVertical: 20,
     textAlign: 'center',
+  },
+  totalCountsText: {
+    fontSize: 18,
+    marginVertical: 10,
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   recordText: {
     fontSize: 15,
