@@ -14,6 +14,7 @@ import {
   initialize as initializeHealthConnect,
   requestPermission as requestPermissionHealthConnect,
   readRecords,
+  aggregateRecord
 } from 'react-native-health-connect'; // Android-specific Health Connect
 import AppleHealthKit from 'react-native-health'; // iOS-specific HealthKit
 
@@ -25,17 +26,19 @@ function App(): React.JSX.Element {
 
   const [healthData, setHealthData] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
-  const [totalCounts, setTotalCounts] = useState({
-    steps: 0,
-    heartRate: 0,
-    activeCalories: 0,
-    totalCalories: 0,
-  });
+
 
   useEffect(() => {
     requestPermissions();
     readHealthData();
   }, []);
+
+    // Convert seconds to hours and minutes
+    const convertMinutesToHours = (totalSeconds) => {
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      return `${hours}h ${minutes}m`;
+    };
 
   // Function to get the date in ISO format for today
   const getTodayDate = () => {
@@ -96,184 +99,82 @@ function App(): React.JSX.Element {
     }
   };
 
-  // Function to read the data
+  console.log("healthData",healthData)
+
   const readHealthData = async () => {
     if (Platform.OS === 'android') {
       try {
         const today = getTodayDate();
 
-        const heartRateRecords = await readRecords('HeartRate', {
+        const stepsData = await aggregateRecord({
+          recordType: 'Steps',
           timeRangeFilter: {
             operator: 'between',
             startTime: today,
             endTime: new Date().toISOString(),
           },
+        }).then((result) => {
+              return result  // Aggregated record:  {"result": {"dataOrigins": ["com.healthconnectexample"], "inCalories": 15000000, "inJoules": 62760000.00989097, "inKilocalories": 15000, "inKilojoules": 62760.00000989097}}
         });
 
-        const stepsRecords = await readRecords('Steps', {
+        const sleepData = await aggregateRecord({
+          recordType: 'SleepSession',
           timeRangeFilter: {
             operator: 'between',
             startTime: today,
             endTime: new Date().toISOString(),
           },
+        }).then((result) => {
+          console.log("sleep",result)
+              return result  // Aggregated record:  {"result": {"dataOrigins": ["com.healthconnectexample"], "inCalories": 15000000, "inJoules": 62760000.00989097, "inKilocalories": 15000, "inKilojoules": 62760.00000989097}}
         });
 
-        const activeCaloriesRecords = await readRecords('ActiveCaloriesBurned', {
+        const heartRateRecords = await aggregateRecord({
+          recordType: 'HeartRate',
           timeRangeFilter: {
             operator: 'between',
             startTime: today,
             endTime: new Date().toISOString(),
           },
-        });
+        }).then((result) => {
+          return result  // Aggregated record:  {"result": {"dataOrigins": ["com.healthconnectexample"], "inCalories": 15000000, "inJoules": 62760000.00989097, "inKilocalories": 15000, "inKilojoules": 62760.00000989097}}
+    });
 
-        const totalCaloriesRecords = await readRecords('TotalCaloriesBurned', {
+        const totalCaloriesRecords = await aggregateRecord({
+          recordType: 'TotalCaloriesBurned',
           timeRangeFilter: {
             operator: 'between',
             startTime: today,
             endTime: new Date().toISOString(),
           },
-        });
+        }).then((result) => {
+          return result  // Aggregated record:  {"result": {"dataOrigins": ["com.healthconnectexample"], "inCalories": 15000000, "inJoules": 62760000.00989097, "inKilocalories": 15000, "inKilojoules": 62760.00000989097}}
+    });
 
-        // Sum up the total counts for each record type
-        const totalSteps = stepsRecords.records.reduce((sum, record) => sum + record.count, 0);
-        const totalHeartRate = heartRateRecords.records.reduce((sum, record) => sum + record.samples[0].beatsPerMinute, 0);
-        const totalActiveCalories = activeCaloriesRecords.records.reduce((sum, record) => sum + record.energy.inKilocalories, 0);
-        const totalTotalCalories = totalCaloriesRecords.records.reduce((sum, record) => sum + record.energy.inKilocalories, 0);
-
-        setTotalCounts({
-          steps: totalSteps,
-          heartRate: totalHeartRate,
-          activeCalories: totalActiveCalories,
-          totalCalories: totalTotalCalories,
-        });
-
-        const combinedData = {
-          heartRate: heartRateRecords.records,
-          steps: stepsRecords.records,
-          activeCalories: activeCaloriesRecords.records,
-          totalCalories: totalCaloriesRecords.records,
-        };
-
-        setHealthData(combinedData);
+        const activeCaloriesRecords = await aggregateRecord({
+          recordType: 'ActiveCaloriesBurned',
+          timeRangeFilter: {
+            operator: 'between',
+            startTime: today,
+            endTime: new Date().toISOString(),
+          },
+        }).then((result) => {
+          return result  // Aggregated record:  {"result": {"dataOrigins": ["com.healthconnectexample"], "inCalories": 15000000, "inJoules": 62760000.00989097, "inKilocalories": 15000, "inKilojoules": 62760.00000989097}}
+    });
+     
+    const combinedData = {
+      heartRate: heartRateRecords,
+      steps: stepsData,
+      activeCalories: activeCaloriesRecords,
+      totalCalories: totalCaloriesRecords,
+      sleep:sleepData
+    };
+    setHealthData(combinedData);
+      
       } catch (error) {
         console.error('Error reading Health Connect data:', error);
         setErrorMessage(error.message);
       }
-    } else if (Platform.OS === 'ios') {
-      try {
-        // Initialize totals
-        let heartRateTotal = 0;
-        let stepsTotal = 0;
-        let activeCaloriesTotal = 0;
-        let totalCaloriesTotal = 0;
-  
-        // Read heart rate data
-        AppleHealthKit.getHeartRateSamples(
-          {
-            startDate: startOfDay,
-            endDate: endOfDay,
-          },
-          (err, heartRateResults) => {
-            if (err) {
-              console.error('Error reading heart rate data:', err);
-              setErrorMessage(err.message);
-              return;
-            }
-  
-            // Calculate total heart rate (e.g., average BPM for the day)
-            if (heartRateResults.length > 0) {
-              heartRateTotal = heartRateResults.reduce((acc, record) => acc + record.value, 0) / heartRateResults.length;
-            }
-  
-            // Update health data
-            setHealthData(prevState => ({
-              ...prevState,
-              heartRate: heartRateResults,
-              heartRateTotal,
-            }));
-          },
-        );
-  
-        // Read step count data
-        AppleHealthKit.getStepCount(
-          {
-            startDate: startOfDay,
-            endDate: endOfDay,
-          },
-          (err, stepsResults) => {
-            if (err) {
-              console.error('Error reading step count:', err);
-              setErrorMessage(err.message);
-              return;
-            }
-  
-            // Calculate total steps
-            stepsTotal = stepsResults.reduce((acc, record) => acc + record.value, 0);
-  
-            // Update health data
-            setHealthData(prevState => ({
-              ...prevState,
-              steps: stepsResults,
-              stepsTotal,
-            }));
-          },
-        );
-  
-        // Read active calories burned
-        AppleHealthKit.getActiveEnergyBurned(
-          {
-            startDate: startOfDay,
-            endDate: endOfDay,
-          },
-          (err, activeCaloriesResults) => {
-            if (err) {
-              console.error('Error reading active calories burned:', err);
-              setErrorMessage(err.message);
-              return;
-            }
-  
-            // Calculate total active calories
-            activeCaloriesTotal = activeCaloriesResults.reduce((acc, record) => acc + record.value, 0);
-  
-            // Update health data
-            setHealthData(prevState => ({
-              ...prevState,
-              activeCalories: activeCaloriesResults,
-              activeCaloriesTotal,
-            }));
-          },
-        );
-  
-        // Read total calories burned
-        AppleHealthKit.getCaloriesBurned(
-          {
-            startDate: startOfDay,
-            endDate: endOfDay,
-          },
-          (err, totalCaloriesResults) => {
-            if (err) {
-              console.error('Error reading total calories burned:', err);
-              setErrorMessage(err.message);
-              return;
-            }
-  
-            // Calculate total calories burned
-            totalCaloriesTotal = totalCaloriesResults.reduce((acc, record) => acc + record.value, 0);
-  
-            // Update health data
-            setHealthData(prevState => ({
-              ...prevState,
-              totalCalories: totalCaloriesResults,
-              totalCaloriesTotal,
-            }));
-          },
-        );
-      } catch (error) {
-        console.error('Error reading HealthKit data:', error);
-        setErrorMessage(error.message);
-      }
-    
-
     }
   };
 
@@ -286,27 +187,36 @@ function App(): React.JSX.Element {
       <Text style={styles.title}>Health Connect Data (Today)</Text>
 
       {/* Display total counts for today */}
-      <Text style={styles.totalCountsText}>Total Steps: {totalCounts.steps}</Text>
-      <Text style={styles.totalCountsText}>Total Heart Rate: {totalCounts.heartRate}</Text>
-      <Text style={styles.totalCountsText}>Total Active Calories Burned: {totalCounts.activeCalories}</Text>
-      <Text style={styles.totalCountsText}>Total Calories Burned: {totalCounts.totalCalories}</Text>
+      {healthData ? (
+        <>
+          <Text style={styles.totalCountsText}>
+            Total Steps: {healthData.steps?.COUNT_TOTAL ?? 0}
+          </Text>
+          <Text style={styles.totalCountsText}>
+            Total Heart Rate: {healthData.heartRate?.BPM_AVG ?? 0}
+          </Text>
+          <Text style={styles.totalCountsText}>
+            Total Active Calories Burned: {healthData.activeCalories.ACTIVE_CALORIES_TOTAL?.inKilocalories ?? 0}
+          </Text>
+          <Text style={styles.totalCountsText}>
+            Total Calories Burned: {healthData.totalCalories?.ENERGY_TOTAL.inKilocalories ?? 0}
+          </Text>
+          <Text style={styles.totalCountsText}>
+          Sleep: {healthData.sleep?.SLEEP_DURATION_TOTAL ? convertMinutesToHours(healthData.sleep.SLEEP_DURATION_TOTAL) : '0h 0m'}
+          </Text>
+        </>
+      ) : (
+        <Text style={styles.noDataText}>No health data available for today</Text>
+      )}
 
-      <Button title="Write Heart Rate Data"/>
+      <Button title="Write Heart Rate Data" />
+      
       {/* Display error message if exists */}
       {errorMessage ? (
         <Text style={styles.errorText}>Error: {errorMessage}</Text>
       ) : null}
 
-      <ScrollView contentContainerStyle={styles.scrollViewContent}>
-        {/* Display health data if available */}
-        {healthData ? (
-          <>
-            {/* Existing data display logic */}
-          </>
-        ) : (
-          <Text style={styles.noDataText}>No health data available for today</Text>
-        )}
-      </ScrollView>
+      <ScrollView contentContainerStyle={styles.scrollViewContent}></ScrollView>
     </SafeAreaView>
   );
 }
