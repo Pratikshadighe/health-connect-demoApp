@@ -47,6 +47,14 @@ function App(): React.JSX.Element {
     return today.toISOString();
   };
 
+  const getOctoberFirstDate = () => {
+    const date = new Date();
+    date.setFullYear(2024); // Set the year to 2024
+    date.setMonth(9); // October is month 9 (0-based index)
+    date.setDate(1); // Set to 1st of the month
+    date.setHours(0, 0, 0, 0); // Set to midnight
+    return date.toISOString();
+  };
    // Request permissions for reading and writing data
    const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -175,48 +183,165 @@ function App(): React.JSX.Element {
         console.error('Error reading Health Connect data:', error);
         setErrorMessage(error.message);
       }
+    }else if (Platform.OS === 'ios') {
+      // iOS-specific HealthKit reading logic here
+      const now = new Date();
+      const startOfDay = new Date(now.setHours(0, 0, 0, 0));
+      const endOfDay = new Date();
+
+      AppleHealthKit.getHeartRateSamples(
+        {
+          startDate: startOfDay.toISOString(),
+          endDate: endOfDay.toISOString(),
+          limit: 1,
+          ascending: false,
+        },
+        (err: any, results: any) => {
+          if (err) {
+            console.error('Error fetching heart rate data:', err);
+            return;
+          }
+          if (results.length > 0) {
+            const latestHeartRate = [];
+            latestHeartRate.push(results[0]);
+            setHealthData((prevState: any) => ({
+              ...prevState,
+              heartRate: latestHeartRate[0].value,
+            }));
+          }
+        }
+      );
+
+      AppleHealthKit.getStepCount(
+        { date: new Date().toISOString() },
+        (err: any, stepsResults: any) => {
+          if (err) {
+            console.error('Error reading step count:', err);
+            setErrorMessage(err.message);
+            return;
+          }
+          setHealthData((prevState: any) => ({
+            ...prevState,
+            steps: stepsResults,
+          }));
+        }
+      );
+
+      AppleHealthKit.getActiveEnergyBurned(
+        {
+          startDate: startOfDay.toISOString(),
+          endDate: endOfDay.toISOString(),
+        },
+        (err: any, results: any) => {
+          if (err) {
+            console.error('Error reading active calories burned:', err);
+            setErrorMessage(err.message);
+            return;
+          }
+          if (results && results.length > 0) {
+            const totalActiveCalories = results.reduce((total: number, entry: any) => {
+              return total + (entry.value || 0);
+            }, 0);
+            setHealthData((prevState: any) => ({
+              ...prevState,
+              activeCalories: totalActiveCalories,
+            }));
+          }
+        }
+      );
+
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+      AppleHealthKit.getSleepSamples(
+        {
+          startDate: oneWeekAgo.toISOString(),
+          endDate: now.toISOString(),
+          limit: 10,
+          ascending: false,
+        },
+        (err: any, results: any) => {
+          if (err) {
+            console.error('Error reading sleep data:', err);
+            setErrorMessage(err.message);
+            return;
+          }
+
+          const sleepData = results.map((sample: any) => {
+            const startDate = new Date(sample.startDate);
+            const endDate = new Date(sample.endDate);
+            const durationInMinutes = (endDate.getTime() - startDate.getTime()) / (1000 * 60);
+            const hours = Math.floor(durationInMinutes / 60);
+            const minutes = Math.floor(durationInMinutes % 60);
+
+            return {
+              startDate: startDate.toLocaleString(),
+              endDate: endDate.toLocaleString(),
+              value: sample.value,
+              duration: `${hours}h ${minutes}m`,
+            };
+          });
+
+          setHealthData((prevState: any) => ({
+            ...prevState,
+            sleep: sleepData[0],
+          }));
+        }
+      );
     }
   };
 
   return (
-    <SafeAreaView style={backgroundStyle}>
+<SafeAreaView style={backgroundStyle}>
       <StatusBar
         barStyle={isDarkMode ? 'light-content' : 'dark-content'}
         backgroundColor={backgroundStyle.backgroundColor}
       />
       <Text style={styles.title}>Health Connect Data (Today)</Text>
 
-      {/* Display total counts for today */}
-      {healthData ? (
+      {Platform.OS === 'android' ? (
         <>
           <Text style={styles.totalCountsText}>
-            Total Steps: {healthData.steps?.COUNT_TOTAL ?? 0}
+            Total Steps: {healthData?.steps?.COUNT_TOTAL ?? 0}
           </Text>
           <Text style={styles.totalCountsText}>
-            Total Heart Rate: {healthData.heartRate?.BPM_AVG ?? 0}
+            Total Heart Rate: {healthData?.heartRate?.BPM_AVG ?? 0}
           </Text>
           <Text style={styles.totalCountsText}>
-            Total Active Calories Burned: {healthData.activeCalories.ACTIVE_CALORIES_TOTAL?.inKilocalories ?? 0}
+            Total Active Calories Burned: {healthData?.activeCalories.ACTIVE_CALORIES_TOTAL?.inKilocalories ?? 0}
           </Text>
           <Text style={styles.totalCountsText}>
-            Total Calories Burned: {healthData.totalCalories?.ENERGY_TOTAL.inKilocalories ?? 0}
+            Total Calories Burned: {healthData?.totalCalories?.ENERGY_TOTAL.inKilocalories ?? 0}
           </Text>
           <Text style={styles.totalCountsText}>
-          Sleep: {healthData.sleep?.SLEEP_DURATION_TOTAL ? convertMinutesToHours(healthData.sleep.SLEEP_DURATION_TOTAL) : '0h 0m'}
+          Sleep: {healthData?.sleep?.SLEEP_DURATION_TOTAL ? convertMinutesToHours(healthData.sleep.SLEEP_DURATION_TOTAL) : '0h 0m'}
           </Text>
         </>
       ) : (
-        <Text style={styles.noDataText}>No health data available for today</Text>
+        <><Text style={styles.totalCountsText}>
+            Total Steps: {healthData?.steps?.value ?? 0}
+          </Text><Text style={styles.totalCountsText}>
+              Total Heart Rate: {healthData?.heartRate ?? 0}
+            </Text><Text style={styles.totalCountsText}>
+            Active Calorie Burned: {healthData?.activeCalories ?? 0}
+          </Text>
+          <Text style={styles.totalCountsText}>
+          Sleep: {healthData.sleep?.duration  ?? '0h 0m'}
+          </Text>
+          </>
+    
       )}
 
-      <Button title="Write Heart Rate Data" />
-      
-      {/* Display error message if exists */}
-      {errorMessage ? (
-        <Text style={styles.errorText}>Error: {errorMessage}</Text>
-      ) : null}
-
-      <ScrollView contentContainerStyle={styles.scrollViewContent}></ScrollView>
+      {/* <Button title="Write Heart Rate Data" onPress={() => {}} /> */}
+      <ScrollView>
+        {/* <Text style={styles.dataContainer}>
+          {errorMessage ? (
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          ) : (
+            JSON.stringify(healthData, null, 2)
+          )}
+        </Text> */}
+      </ScrollView>
     </SafeAreaView>
   );
 }
